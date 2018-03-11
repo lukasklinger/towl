@@ -5,10 +5,6 @@
 
 #include "config.h"
 
-#ifdef OAK
-SYSTEM_MODE(SEMI_AUTOMATIC);
-#endif
-
 #include <TimeLib.h>
 #include <Time.h>
 
@@ -21,9 +17,20 @@ SYSTEM_MODE(SEMI_AUTOMATIC);
 #include <WiFiUdp.h>
 #include <EEPROM.h>
 
+#include <SPI.h>
+#include <SD.h>
+
 // Globals:
 Base32 base32;
 TinyGPS gps;
+const int chipSelect = D8;
+bool sdPresent = false;
+bool bootGPSReceiver = true;
+bool outputGPSData = false;
+String fileName;
+String filePrefix = "GPS"; //three letter prefix for files
+String fileExtension = "LOG";
+int firstFileNumber = 0;
 
 struct telem {
   uint32_t tstamp;
@@ -51,26 +58,44 @@ uint8_t sendStoredTelem(void);
 int connectAP(void);
 uint8_t sendDNSTelem(struct telem *);
 void serDelay(unsigned long);
+void setFileName(void);
 void setup(void);
 void loop(void);
-#ifdef OAK
-void homeConnect();
-#endif
-
 
 void setup() {
+  digitalWrite(16, LOW);
+  pinMode(16, INPUT);
   Serial.begin(GPS_BAUD);
-  delay(100);
+  delay(500);
   Serial.println("Startup sequence.");
   pinMode(LED, OUTPUT);
   analogWrite(LED, 0);
   randomSeed(analogRead(0));
   memset(tstore, 0, sizeof(tstore));
-#ifdef OAK
-  homeConnect();
-#else
   WiFi.mode(WIFI_STA);
-#endif
+
+  Serial.println("Trying to initialize SD card.");
+  if(SD.begin(chipSelect)){
+    sdPresent = true;
+    Serial.println("SD card initialized.");
+    setFileName();
+    Serial.println("current file name: " + fileName);
+  }
+  else{
+    Serial.println("Could not initialize SD card. Proceeding without.");
+  }
+  
+  if(bootGPSReceiver){
+    Serial.println("Waiting for GPS Receiver.");
+    delay(10000);
+    Serial.println("Turning on GPS receiver.");
+    pinMode(16, OUTPUT);
+    delay(6500);
+    pinMode(16, INPUT);
+    delay(20);
+  }
+
+  Serial.println("Startup done.");
 }
 
 void loop() {
@@ -79,10 +104,12 @@ void loop() {
   parseGPS();
 
   if (gps.satellites() != 255) {
+    Serial.println("retrieving location");
     res = 0;
     analogWrite(LED, gps.satellites() * (1024 / 11));
     if (timeStatus() == timeNotSet) setGPSTime();
     else {
+      Serial.println("Sending");
       currentpos = getTelem();
       if (connectAP() == 1) res = sendDNSTelem(currentpos);
       if (res == 1) {
@@ -98,28 +125,6 @@ void loop() {
     }
   }
 }
-
-#ifdef OAK
-void homeConnect() {
-  int numNets = WiFi.scanNetworks();
-  uint16_t thisNet;
-  for (thisNet = 0; thisNet < numNets; thisNet++)
-    if (strcmp(WiFi.SSID(thisNet).c_str(), HOMESSID) == 0) break;
-  if (thisNet < numNets) {
-    Particle.connect();
-    for (uint8_t i=0; i<70; i++) {
-      analogWrite(LED, 1023);
-      delay(100);
-      analogWrite(LED, 0);
-      delay(100);
-      if (Particle.connected() == false) Particle.connect();
-    }
-    Particle.disconnect();
-    WiFi.disconnect();
-  }
-  return;
-}
-#endif
 
 uint16_t findSlot(uint8_t pmode) {
   // Find a memory slot that is empty or at a higher time
@@ -212,11 +217,8 @@ int connectAP() {
     Serial.print(wSSID);
     WiFi.disconnect();
     WiFi.persistent(false);
-#ifdef OAK
-      wstatus = WiFi.begin_internal(wSSID, NULL, 0, NULL);
-#else 
-      wstatus = WiFi.begin(wSSID, NULL, 0, NULL, true);
-#endif
+    wstatus = WiFi.begin(wSSID, NULL, 0, NULL, true);
+
     for (uint8_t i=0; i < 65; i++) {
       if (wstatus == WL_CONNECTED) {
         Serial.print(". connected. ");
@@ -285,8 +287,23 @@ uint8_t sendDNSTelem(struct telem *tdata) {
 }
 
 void parseGPS() {
-  while(Serial.available())
-    gps.encode(Serial.read());
+  String dataString = "";
+  
+  while(Serial.available()){
+    char c = Serial.read();
+    gps.encode(c);
+    dataString += c;
+  }
+
+  if(dataString.length() != 0 && sdPresent){
+    File dataFile = SD.open(fileName, FILE_WRITE);
+    dataFile.print(dataString);
+    dataFile.close();
+  }
+
+  if(outputGPSData){
+    Serial.print(dataString);
+  }
 }
 
 void serDelay(unsigned long ms) {
@@ -313,3 +330,61 @@ void setGPSTime() {
   Serial.println(timestr);
   return;
 }
+
+void setFileName(){
+  String fileNameTemp = "";
+  String fileNumberTemp = "";
+  int counter = firstFileNumber;
+  
+  fileNameTemp += filePrefix;
+
+  File root = SD.open("/");
+  while(true){
+    File entry = root.openNextFile();
+    if (! entry) {
+      // no more files
+      break;
+    }
+    String entryName = entry.name();
+
+    if(entryName.startsWith(filePrefix)){
+      entryName = entryName.substring((filePrefix.length()), (8));
+      int entryNumber = entryName.toInt();
+
+      if(entryNumber >= counter){
+        counter = (entryNumber + 1);
+      }
+    }
+    entry.close();
+  }
+  root.close();
+
+  if(counter < 10){
+    fileNumberTemp += "0000";
+    fileNumberTemp += (String) counter;
+  }
+  else if (counter < 100){
+    fileNumberTemp += "000";
+    fileNumberTemp += (String) counter;
+  }
+  else if (counter < 1000){
+    fileNumberTemp += "00";
+    fileNumberTemp += (String) counter;
+  }
+  else if (counter < 10000){
+    fileNumberTemp += "0";
+    fileNumberTemp += (String) counter;
+  }
+  else if (counter < 100000){
+    fileNumberTemp += (String) counter;
+  }
+  else{
+    fileName = "overflow.log";
+  }
+
+  fileNameTemp += fileNumberTemp;
+  fileNameTemp += ".";
+  fileNameTemp += fileExtension;
+  fileName = fileNameTemp;
+}
+
