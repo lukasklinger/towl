@@ -10,12 +10,13 @@ from dnslib import *
 
 import base64
 import struct
+import urllib2
 
 # Port to listen on.  I use a high port to run as a non-root user and then
 # map to it in iptables.  Alternatively change to port 53 and run as root.
 PORT = 5300
-SUBDOMAIN = '.foobar.example.com.'
-LOGDIR = '/var/tmp'
+SUBDOMAIN = '.dns.example.com.'
+LOGDIR = '/home/user/towl/log'
 
 def parseCovert(devid, data):
   dstr = data.upper().split('.')[0]
@@ -48,6 +49,8 @@ def parseCovert(devid, data):
       lf.write('%s,%d,%f,%f,%d,%d,%d\n' % (datetime.datetime.now(), tm,
                                         lat/1000000.0, lon/1000000.0,
                                         spd, sats, mode))
+      traccar = "http://localhost:5055/?id=" + str(devid) + "&lat=" + str(lat/1000000.0) + "&lon=" + str(lon/1000000.0) + "&timestamp=" + str(tm) + "&speed=" + str(spd)
+      content = urllib2.urlopen(traccar).read()
       return id
 
     print 'Decoded: %s' % res
