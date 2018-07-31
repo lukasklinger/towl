@@ -50,7 +50,9 @@ def parseCovert(devid, data):
                                         lat/1000000.0, lon/1000000.0,
                                         spd, sats, mode))
       traccar = "http://localhost:5055/?id=" + str(devid) + "&lat=" + str(lat/1000000.0) + "&lon=" + str(lon/1000000.0) + "&timestamp=" + str(tm) + "&speed=" + str(spd)
-      content = urllib2.urlopen(traccar).read()
+      connection = urllib2.urlopen(traccar)
+      content = connection.read()
+      connection.close()
       return id
 
     print 'Decoded: %s' % res
